@@ -1,34 +1,62 @@
 use chinook;
-
--- check not found track in invoiceline
-select TrackId
-from invoiceline
-where TrackId not in(select TrackId
-from track);
-
--- check artist count per album
-select AlbumId, COUNT(distinct artistId) as total_artists
-from album 
-group by 1
-having total_artists > 1;
-
-
--- check not found invoice in invoiceline
-select * from
-invoiceline
-where invoiceId NOT IN(select invoiceId
-from invoice);
-
--- check total on invoice and unitprice * quantity from invoiceLine
-select i.invoiceId,i.Total,sum(il.UnitPrice * il.Quantity)
-from invoiceline il JOIN
-invoice i
-on il.InvoiceId = i.InvoiceId
-group by i.invoiceId,i.Total
-having i.Total != sum(il.UnitPrice * il.Quantity);
-
 -- event scheduler on
 set global event_scheduler = on;
+
+-- create data quality issues logs
+create table data_quality_issues_logs(
+log_id int auto_increment Primary Key,
+check_type text,
+result int,
+created_date timestamp default current_timestamp);
+
+-- for checking data quality issues 
+DELIMITER //
+
+CREATE EVENT data_quality_issues_logs
+ON SCHEDULE EVERY 1 day STARTS '2024-11-18 05:47:00'
+DO
+BEGIN
+    -- Check not found track in invoiceline
+    INSERT INTO data_quality_issues_logs(check_type, result)
+    SELECT "track not found in invoiceline", COUNT(il.TrackId)
+    FROM invoiceline il
+    LEFT JOIN track t ON il.TrackId = t.TrackId
+    WHERE t.TrackId IS NULL;
+
+    -- Check artist count per album
+    INSERT INTO data_quality_issues_logs(check_type, result)
+    SELECT "artist count per album", COUNT(1)
+    FROM (
+        SELECT AlbumId, COUNT(DISTINCT artistId) AS total_artists
+        FROM album
+        GROUP BY AlbumId
+        HAVING total_artists > 1
+    ) AS artistcount;
+
+    -- Check not found invoice in invoiceline
+    INSERT INTO data_quality_issues_logs(check_type, result)
+    SELECT "not found invoice in invoiceline", COUNT(il.invoiceId)
+    FROM invoiceline il
+    LEFT JOIN invoice i ON il.invoiceId = i.invoiceId
+    WHERE i.invoiceId IS NULL;
+
+    -- Check discrepancies between invoice and invoiceline
+    INSERT INTO data_quality_issues_logs(check_type, result)
+    SELECT 'check discrepancies between invoice and invoiceline', COUNT(1)
+    FROM (
+        SELECT i.invoiceId, i.Total, SUM(il.UnitPrice * il.Quantity) AS total_calculated
+        FROM invoiceline il
+        JOIN invoice i ON il.InvoiceId = i.InvoiceId
+        GROUP BY i.invoiceId, i.Total
+        HAVING i.Total != SUM(il.UnitPrice * il.Quantity)
+    ) AS discrepancies;
+END //
+
+DELIMITER ;
+
+
+-- retrieve from data quality issues logs
+select * from data_quality_issues_logs;
 
 -- run by schedule for product_rpt_detail
 DELIMITER //
